@@ -39,7 +39,7 @@ def cone(shape, apex, base_center, base_radius, value=1):
     z, y, x = np.ogrid[:shape[0], :shape[1], :shape[2]]
     height = apex[0] - base_center[0]
     dist_from_base_center = np.sqrt((x - base_center[2]) ** 2 + (y - base_center[1]) ** 2)
-    radius_at_height = base_radius * (1 - (z - base_center[0]) / height)
+    radius_at_height = base_radius * (1 - (z - base_center[0]) / (height+1e-5))
     image[(dist_from_base_center <= radius_at_height) & (z >= base_center[0]) & (z <= apex[0])] = value
     return image
 
@@ -56,7 +56,7 @@ def create_composite_3d_image(shape, num_objects=5):
     composite_image = create_3d_image(shape, fill_value=weight)
     mask = create_3d_image(shape)
 
-    object_functions = [sphere, rectangular_prism, torus, cone]
+    object_functions = [sphere, sphere, sphere, rectangular_prism, torus, torus, cone]
 
     for _ in range(num_objects):
         # Choose a random object function
@@ -86,26 +86,62 @@ def create_composite_3d_image(shape, num_objects=5):
 
         # Add the weighted object to the composite image
         composite_image += weight * obj
-        mask += obj!=0
+        mask += obj != 0
+
+    val = np.quantile(np.abs(composite_image), 0.95)
+    composite_image = composite_image * 0.1 / (val + 0.001)
 
     mask = mask != 0
-    return composite_image*mask, mask
+    return composite_image * mask, mask
 
 
 # Example usage
 if __name__ == "__main__":
     from utils import plot_3d_medical_image, continuous_dipole_kernel
 
-    shape = (64, 64, 64)
+    #
+    # shape = (64, 64, 64)
+    #
+    # # Create a sphere
+    # composite_image, mask = create_composite_3d_image(shape, num_objects=100)
+    #
+    # K = continuous_dipole_kernel(shape)
+    #
+    # phase = np.real(np.fft.ifftn(K * np.fft.fftn(composite_image)))
+    #
+    # plot_3d_medical_image(composite_image, title="3D composite_image")
+    # plot_3d_medical_image(phase, title="3D composite_image Phase")
+    # plot_3d_medical_image(mask, title="3D composite_image")
 
-    # Create a sphere
-    composite_image, mask = create_composite_3d_image(shape, num_objects=100)
+    from threading import Thread
+    import os
+    from tqdm import tqdm
 
-    K = continuous_dipole_kernel(shape)
+    threads_number = 2
 
-    phase = np.real(np.fft.ifftn(K * np.fft.fftn(composite_image)))
+    path = "./data"
+    if not os.path.exists(path):
+        os.mkdir(path)
 
-    plot_3d_medical_image(composite_image, title="3D composite_image")
-    plot_3d_medical_image(phase, title="3D composite_image Phase")
-    plot_3d_medical_image( mask, title="3D composite_image")
+    N = [64, 64, 64]
+    K = continuous_dipole_kernel(N)
+
+
+    def gen_and_save(idx):
+        chi, mask = create_composite_3d_image(N, num_objects=100)
+        phase = np.real(np.fft.ifftn(K * np.fft.fftn(chi)))
+        with open(f'{path}/{idx}.npz', 'wb') as file:
+            np.savez(file, chi=chi, mask=mask, phase=phase)
+
+
+    threads = []
+    for idx in tqdm(range(10)):
+        threads.append(Thread(target=gen_and_save, args=(idx,)))
+        threads[-1].start()
+        if idx % threads_number == 0:
+            for worker in threads:
+                worker.join()
+            threads = []
+    for worker in threads:
+        worker.join()
 
