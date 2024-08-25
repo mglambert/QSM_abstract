@@ -6,6 +6,7 @@ venv/
 # C extensions
 *.so
 .DS_store
+*.idea/
 
 # Distribution / packaging
 .Python
