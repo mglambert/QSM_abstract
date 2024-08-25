@@ -1,79 +1,131 @@
 import torch
 import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader
 from tqdm import tqdm
-from red import UNet3D
 
 
-# Assuming we have already defined the UNet3D class from the previous example
-
-def train_unet3d(model, train_loader, val_loader, num_epochs, learning_rate, device):
-    criterion = nn.BCEWithLogitsLoss()  # Binary Cross Entropy Loss
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-
-    model.to(device)
-
-    for epoch in range(num_epochs):
+def run_epoch(model, dataloader, criterion, metric, device, optimizer=None, epoch=0, total_epoch=0, phase='train'):
+    if phase == 'train':
+        torch.cuda.empty_cache()
         model.train()
-        train_loss = 0.0
-
-        # Training loop
-        for batch in tqdm(train_loader, desc=f"Epoch {epoch + 1}/{num_epochs} - Training"):
-            inputs, targets = batch
-            inputs, targets = inputs.to(device), targets.to(device)
-
-            optimizer.zero_grad()
-            outputs = model(inputs)
-            loss = criterion(outputs, targets)
-            loss.backward()
-            optimizer.step()
-
-            train_loss += loss.item()
-
-        train_loss /= len(train_loader)
-
-        # Validation loop
+    elif phase == 'val' or 'test':
+        torch.cuda.empty_cache()
         model.eval()
-        val_loss = 0.0
-        with torch.no_grad():
-            for batch in tqdm(val_loader, desc=f"Epoch {epoch + 1}/{num_epochs} - Validation"):
-                inputs, targets = batch
-                inputs, targets = inputs.to(device), targets.to(device)
 
-                outputs = model(inputs)
-                loss = criterion(outputs, targets)
-                val_loss += loss.item()
+    cum_loss = 0.0
+    cum_metric_value = 0.0
 
-        val_loss /= len(val_loader)
+    with tqdm(dataloader, unit='batch', position=0, leave=True) as tepoch:
+        for n_batch, (phi, gt, mask) in enumerate(tepoch, start=1):
+            if phase == 'train':
+                torch.cuda.empty_cache()
+                model.train()
+                tepoch.set_description(f"Epoch {epoch}/{total_epoch}")
+                optimizer.zero_grad()
 
-        print(f"Epoch {epoch + 1}/{num_epochs}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+            elif phase == 'val':
+                tepoch.set_description(f"\tVal. ")
 
-    print("Training completed.")
+            phi = (phi*mask).to(device)
+
+            result = model(phi)
+            result = result * mask.to(device)
+
+            gt = gt.to(device)
+
+            torch.cuda.empty_cache()
+
+            loss = criterion(result, gt)
+
+            metric_value = metric(result, gt).item()
+            cum_loss += loss.item()
+            cum_metric_value += metric_value
+
+            if phase == 'train':
+                loss.backward()
+                optimizer.step()
+
+            current_cum_loss = cum_loss / n_batch
+            current_metric_value = cum_metric_value / n_batch
+            tepoch.set_postfix(Loss=current_cum_loss,
+                               NRMSE=current_metric_value)
+
+    epoch_loss = float(cum_loss / n_batch)
+    mse_epoch = float(cum_metric_value / n_batch)
+    return epoch_loss, mse_epoch
 
 
-# Example usage
-if __name__ == "__main__":
-    # Hyperparameters
-    input_channels = 1
-    output_channels = 1
-    learning_rate = 0.001
-    num_epochs = 50
-    batch_size = 4
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Create model
-    model = UNet3D(input_channels, output_channels)
+def run_training(model, data_train, data_val, optimizer, criterion, metric, device, n_epochs, scheduler=None):
 
-    # Assume we have defined custom Dataset classes: TrainDataset and ValDataset
-    train_dataset = TrainDataset(...)
-    val_dataset = ValDataset(...)
+    history = {
+        'train': {'loss': [], 'metric': []},
+        'val': {'loss': [], 'metric': []},
+    }
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
+    for epoch in range(1, n_epochs + 1):
+        epoch_loss, rmse = run_epoch(model, data_train, criterion, metric, device, optimizer=optimizer, epoch=epoch,
+                                     total_epoch=n_epochs, phase='train')
 
-    # Train the model
-    train_unet3d(model, train_loader, val_loader, num_epochs, learning_rate, device)
+        history['train']['loss'].append(epoch_loss)
+        history['train']['metric'].append(rmse)
 
-    # Save the trained model
-    torch.save(model.state_dict(), "unet3d_model.pth")
+        if data_val is not None:
+            val_loss, rmse = run_epoch(model, data_val, criterion, metric, device, phase='val', experiment=experiment)
+            history['val']['loss'].append(val_loss)
+            history['val']['metric'].append(rmse)
+
+        if scheduler is not None:
+            scheduler.step()
+    return history
+
+if __name__ == '__main__':
+
+    from red import UNet3D
+    from qsmloader import QSMLoader
+    from torch.utils.data import DataLoader
+    from utils import plot_3d_medical_image
+    import matplotlib.pyplot as plt
+    from loss import quantile_regression_loss_fn
+
+
+    # torch.cuda.init()
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+    hyper_params = {
+        "learning_rate": 1e-4,
+        "epochs": 2,
+        "train_batch_size": 1,
+        "val_batch_size": 1,
+        "exponential_lr_param": 0.99999999999,
+        "weight_decay": 1e-20,
+    }
+
+    ds_train = QSMLoader(list(range(1)), train=True)
+    train_dl = DataLoader(ds_train, batch_size=hyper_params['train_batch_size'], shuffle=True)
+
+    model = UNet3D(in_channels=1, out_channels=3)
+    model = model.to(device)
+
+    metric = nn.MSELoss()
+    criterion = quantile_regression_loss_fn
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=hyper_params['learning_rate'],
+                                 weight_decay=hyper_params['weight_decay']
+                                 )
+
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, hyper_params['exponential_lr_param'])
+
+    history = run_training(model, train_dl, None, optimizer, criterion, metric, device, hyper_params['epochs'],
+                            scheduler=scheduler)
+
+    plt.figure()
+    plt.plot(history['train']['loss'], label='train')
+    plt.legend()
+    plt.show()
+
+    for phase, gt, mask in train_dl:
+        plot_3d_medical_image(gt[0, 0], 'GT', )
+        with torch.inference_mode():
+            out = model((phase).to(device)).cpu()
+        plot_3d_medical_image(out[0, 1], 'inference')
+        break
