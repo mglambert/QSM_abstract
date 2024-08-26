@@ -30,10 +30,10 @@ class PinballLoss(nn.Module):
 def quantile_regression_loss_fn(pred, target):
   q_lo_loss = PinballLoss(quantile=0.05)
   q_hi_loss = PinballLoss(quantile=0.95)
-  mse_loss = nn.MSELoss()
+  mse_loss = nn.L1Loss()
 
   loss = q_lo_loss(pred[:,0,:,:,:].squeeze(), target.squeeze()) + \
          q_hi_loss(pred[:,2,:,:,:].squeeze(), target.squeeze()) + \
-         mse_loss(pred[:,1,:,:,:].squeeze(), target.squeeze())
+         2*mse_loss(pred[:,1,:,:,:].squeeze(), target.squeeze())
 
   return loss

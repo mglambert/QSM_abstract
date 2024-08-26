@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-def plot_3d_medical_image(image, title=None, cmap='gray'):
+def plot_3d_medical_image(image, title=None, cmap='gray', rango=None):
     """
     Plot a 3D medical image in three views: axial, coronal, and sagittal.
 
@@ -11,6 +11,8 @@ def plot_3d_medical_image(image, title=None, cmap='gray'):
     - title: string, optional title for the entire figure
     - cmap: string, colormap to use for the plots (default is 'gray')
     """
+    if rango is None:
+        rango = (image.min(), image.max())
 
     D, H, W = image.shape
 
@@ -18,22 +20,22 @@ def plot_3d_medical_image(image, title=None, cmap='gray'):
     fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
 
     # Axial view (top-down)
-    ax1.imshow(image[D // 2, :, :], cmap=cmap, aspect='equal')
-    ax1.set_title('Axial View')
+    ax1.imshow(image[D // 2, :, :], cmap=cmap, aspect='equal', vmin=rango[0], vmax=rango[1])
+    # ax1.set_title('Axial View')
     ax1.axis('off')
 
     # Coronal view (front)
-    ax2.imshow(image[:, H // 2, :], cmap=cmap, aspect='equal')
-    ax2.set_title('Coronal View')
+    ax2.imshow(image[:, H // 2, :], cmap=cmap, aspect='equal', vmin=rango[0], vmax=rango[1])
+    # ax2.set_title('Coronal View')
     ax2.axis('off')
 
     # Sagittal view (side)
-    ax3.imshow(image[:, :, W // 2], cmap=cmap, aspect='equal')
-    ax3.set_title('Sagittal View')
+    ax3.imshow(image[:, :, W // 2], cmap=cmap, aspect='equal', vmin=rango[0], vmax=rango[1])
+    # ax3.set_title('Sagittal View')
     ax3.axis('off')
 
     if title:
-        fig.suptitle(title, fontsize=16)
+        fig.suptitle(title, fontsize=32)
 
     plt.tight_layout()
     plt.show()

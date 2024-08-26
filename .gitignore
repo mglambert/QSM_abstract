@@ -8,6 +8,8 @@ venv/
 .DS_store
 *.idea/
 data/
+saved/
+*.pth
 
 # Distribution / packaging
 .Python
