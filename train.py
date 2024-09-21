@@ -15,7 +15,7 @@ def run_epoch(model, dataloader, criterion, metric, device, optimizer=None, epoc
     cum_metric_value = 0.0
 
     with tqdm(dataloader, unit='batch', position=0, leave=True) as tepoch:
-        for n_batch, (phi, gt, mask) in enumerate(tepoch, start=1):
+        for n_batch, (phi, gt, mask, phase_sr) in enumerate(tepoch, start=1):
             if phase == 'train':
                 torch.cuda.empty_cache()
                 model.train()
@@ -36,7 +36,8 @@ def run_epoch(model, dataloader, criterion, metric, device, optimizer=None, epoc
 
             torch.cuda.empty_cache()
 
-            loss = criterion(result, gt)
+            phase_sr = (phase_sr * mask).to(device)
+            loss = criterion(result, gt, phase_sr)
 
             metric_value = metric(result[:, 1:2], gt).item()
             cum_loss += loss.item()
@@ -94,7 +95,7 @@ if __name__ == '__main__':
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     hyper_params = {
-        "learning_rate": 1e-4,
+        "learning_rate": 0.5e-4,
         "epochs": 50,
         "train_batch_size": 16,
         "val_batch_size": 10,
@@ -102,14 +103,14 @@ if __name__ == '__main__':
         "weight_decay": 1e-6,
     }
 
-    ds_train = QSMLoader(list(range(26_900)), train=True)
+    ds_train = QSMLoader(list(range(5_000, 66_182)), train=True)
     train_dl = DataLoader(ds_train, batch_size=hyper_params['train_batch_size'], shuffle=True)
-    ds_val = QSMLoader(list(range(26_900, 27_000)), train=False)
+    ds_val = QSMLoader(list(range(5_00)), train=False)
     val_dl = DataLoader(ds_val, batch_size=hyper_params['val_batch_size'], shuffle=True)
-    val_dl = None
+    # val_dl = None
 
     model = UNet3D(in_channels=1, out_channels=3)
-    model.load_state_dict(torch.load('model_epoch_10.pth'))
+    model.load_state_dict(torch.load('model_epoch_10.pth', weights_only=True))
     model = model.to(device)
 
     metric = nn.MSELoss()
@@ -131,7 +132,7 @@ if __name__ == '__main__':
     plt.legend()
     plt.show()
 
-    for phase, gt, mask in train_dl:
+    for phase, gt, mask, phase_sr in train_dl:
         plot_3d_medical_image(gt[0, 0], 'GT', )
         with torch.inference_mode():
             out = model((phase).to(device)).cpu() * mask
@@ -141,7 +142,7 @@ if __name__ == '__main__':
         break
 
     if val_dl:
-        for phase, gt, mask in val_dl:
+        for phase, gt, mask, phase_sr in val_dl:
             plot_3d_medical_image(gt[0, 0], 'GT', )
             with torch.inference_mode():
                 out = model((phase).to(device)).cpu() * mask
@@ -149,6 +150,10 @@ if __name__ == '__main__':
             plot_3d_medical_image(out[0, 0], 'inference  u')
             plot_3d_medical_image(out[0, 2], 'inference l')
             break
+
+    import json
+    with open('history.json', 'w') as f:
+        json.dump(history, f)
 
     if False:
         from scipy import io
@@ -240,66 +245,66 @@ if __name__ == '__main__':
             print(ii, 100 * np.linalg.norm(pred.ravel() - gt.ravel()) / np.linalg.norm(gt.ravel()))
 
 
-
-from scipy.ndimage import affine_transform
-def rotation_matrix(theta):
-    return np.array([
-        [np.cos(theta), -np.sin(theta)],
-        [np.sin(theta), np.cos(theta)]
-    ])
-
-def rotate_image(image, theta):
-    # Matriz de rotación
-    rot_mat = rotation_matrix(theta)
-
-    # Calcular el centro de la imagen
-    center = np.array(image.shape) / 2
-
-    # Trasladar el origen al centro
-    offset = center - np.dot(rot_mat, center)
-
-    # Aplicar la transformación afín
-    rotated_image = affine_transform(
-        image, rot_mat, offset=offset, order=1  # 'order=1' aplica una interpolación bilineal
-    )
-    return rotated_image
-
-
-def plot_3d_medical_image(image, title=None, cmap='gray', rango=None):
-    """
-    Plot a 3D medical image in three views: axial, coronal, and sagittal.
-
-    Parameters:
-    - image: 3D numpy array with shape (D, H, W)
-    - title: string, optional title for the entire figure
-    - cmap: string, colormap to use for the plots (default is 'gray')
-    """
-    if rango is None:
-        rango = (image.min(), image.max())
-
-    D, H, W = image.shape
-
-    # Create a figure with three subplots
-    fig, ax = plt.subplots(1, 1, figsize=(15, 5))
-
-    im1 = image[D // 2, :, :]
-    im1 = rotate_image(im1, np.radians(-90))
-
-    im2 = image[:, H // 2, :]
-    im2 = rotate_image(im2, np.radians(-90))
-
-    im3 = image[:, :, W // 2]
-    im3 = rotate_image(im3, np.radians(90))
-
-    im = np.concatenate([im1, im2, im3], axis=1)
-
-    # Sagittal view (side)
-    ax.imshow(im, cmap=cmap, aspect='equal', vmin=rango[0], vmax=rango[1])
-    # ax3.set_title('Sagittal View')
-    ax.axis('off')
-
-    if title:
-        fig.suptitle(title, fontsize=32)
-
-    plt.tight_layout()
-    plt.show()
+#
+# from scipy.ndimage import affine_transform
+# def rotation_matrix(theta):
+#     return np.array([
+#         [np.cos(theta), -np.sin(theta)],
+#         [np.sin(theta), np.cos(theta)]
+#     ])
+#
+# def rotate_image(image, theta):
+#     # Matriz de rotación
+#     rot_mat = rotation_matrix(theta)
+#
+#     # Calcular el centro de la imagen
+#     center = np.array(image.shape) / 2
+#
+#     # Trasladar el origen al centro
+#     offset = center - np.dot(rot_mat, center)
+#
+#     # Aplicar la transformación afín
+#     rotated_image = affine_transform(
+#         image, rot_mat, offset=offset, order=1  # 'order=1' aplica una interpolación bilineal
+#     )
+#     return rotated_image
+#
+#
+# def plot_3d_medical_image(image, title=None, cmap='gray', rango=None):
+#     """
+#     Plot a 3D medical image in three views: axial, coronal, and sagittal.
+#
+#     Parameters:
+#     - image: 3D numpy array with shape (D, H, W)
+#     - title: string, optional title for the entire figure
+#     - cmap: string, colormap to use for the plots (default is 'gray')
+#     """
+#     if rango is None:
+#         rango = (image.min(), image.max())
+#
+#     D, H, W = image.shape
+#
+#     # Create a figure with three subplots
+#     fig, ax = plt.subplots(1, 1, figsize=(15, 5))
+#
+#     im1 = image[D // 2, :, :]
+#     im1 = rotate_image(im1, np.radians(-90))
+#
+#     im2 = image[:, H // 2, :]
+#     im2 = rotate_image(im2, np.radians(-90))
+#
+#     im3 = image[:, :, W // 2]
+#     im3 = rotate_image(im3, np.radians(90))
+#
+#     im = np.concatenate([im1, im2, im3], axis=1)
+#
+#     # Sagittal view (side)
+#     ax.imshow(im, cmap=cmap, aspect='equal', vmin=rango[0], vmax=rango[1])
+#     # ax3.set_title('Sagittal View')
+#     ax.axis('off')
+#
+#     if title:
+#         fig.suptitle(title, fontsize=32)
+#
+#     plt.tight_layout()
+#     plt.show()

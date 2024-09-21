@@ -14,8 +14,8 @@ class QSMLoader(Dataset):
     def __getitem__(self, idx):
         nombre_archivo = f'{self.root}{self.indices[idx]}.npz'
 
-        phase = self.to_tensor(np.load(nombre_archivo)['phase']).type(torch.float32)
-        phase = torch.unsqueeze(phase, 0)
+        phase_sr = self.to_tensor(np.load(nombre_archivo)['phase']).type(torch.float32)
+        phase_sr = torch.unsqueeze(phase_sr, 0)
 
         chi = self.to_tensor(np.load(nombre_archivo)['chi']).type(torch.float32)
         chi = torch.unsqueeze(chi, 0)
@@ -27,8 +27,8 @@ class QSMLoader(Dataset):
         mag = mag / mag.max()
         mag = mag * mask
 
-        scale = torch.pi / (2*torch.max(torch.abs(phase)))
-        signal = mag * torch.exp(1j * phase * scale)
+        scale = torch.pi / (2*torch.max(torch.abs(phase_sr)))
+        signal = mag * torch.exp(1j * phase_sr * scale)
         # _rr = np.random.rand()
 
         snr = torch.randint(95, 105, (1,))
@@ -38,7 +38,7 @@ class QSMLoader(Dataset):
         phase = torch.angle(signal).type(torch.float32) / scale
         phase = phase * mask
 
-        return phase, chi, mask
+        return phase, chi, mask, phase_sr
 
     def __len__(self):
         return len(self.indices)
@@ -54,8 +54,9 @@ if __name__ == '__main__':
 
     loader = DataLoader(ds_train, batch_size=1, shuffle=True)
 
-    for phase, chi, mask in loader:
+    for phase, chi, mask, phase_sr in loader:
         plot_3d_medical_image(np.asarray(phase[0, 0]))
         plot_3d_medical_image(chi[0, 0])
         plot_3d_medical_image(mask[0, 0])
+        plot_3d_medical_image(phase_sr[0, 0])
         break
