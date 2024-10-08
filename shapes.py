@@ -137,7 +137,8 @@ if __name__ == "__main__":
 
     threads_number = 4
 
-    path = "./data"
+    # path = "./data"
+    path = "./calib"
     if not os.path.exists(path):
         os.mkdir(path)
 
@@ -153,7 +154,7 @@ if __name__ == "__main__":
 
 
     threads = []
-    for idx in tqdm(range(50_000)):
+    for idx in tqdm(range(5_000)):
         threads.append(Thread(target=gen_and_save, args=(idx,)))
         threads[-1].start()
         if idx % threads_number == 0:

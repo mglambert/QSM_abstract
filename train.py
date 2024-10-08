@@ -96,21 +96,22 @@ if __name__ == '__main__':
 
     hyper_params = {
         "learning_rate": 0.5e-4,
-        "epochs": 50,
+        "epochs": 2,
         "train_batch_size": 16,
         "val_batch_size": 10,
         "exponential_lr_param": 0.95,
         "weight_decay": 1e-6,
     }
 
-    ds_train = QSMLoader(list(range(5_000, 66_182)), train=True)
+    ds_train = QSMLoader(list(range(500, 66_182)), train=True)
     train_dl = DataLoader(ds_train, batch_size=hyper_params['train_batch_size'], shuffle=True)
-    ds_val = QSMLoader(list(range(5_00)), train=False)
+    ds_val = QSMLoader(list(range(500)), train=False)
     val_dl = DataLoader(ds_val, batch_size=hyper_params['val_batch_size'], shuffle=True)
     # val_dl = None
 
     model = UNet3D(in_channels=1, out_channels=3)
-    model.load_state_dict(torch.load('model_epoch_10.pth', weights_only=True))
+    # model.load_state_dict(torch.load('model_epoch_10.pth', weights_only=True))
+    model.load_state_dict(torch.load('./saved/model_epoch_48.pth', weights_only=False))
     model = model.to(device)
 
     metric = nn.MSELoss()
