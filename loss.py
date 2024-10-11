@@ -54,3 +54,27 @@ def quantile_regression_loss_fn(pred, target, target_phase):
            3 * qms_loss(pred[:, 1, :, :, :].squeeze(), target_phase.squeeze())
 
     return loss
+
+
+class ConformalLoss(nn.Module):
+    def __init__(self, q=0.1):
+        super(ConformalLoss, self).__init__()
+        self.q1 = PinballLoss(quantile=q / 2)
+        self.q2 = PinballLoss(quantile=1 - q / 2)
+        self.l1 = nn.L1Loss()
+        self.l2 = QSM_Loss()
+
+    def forward(self, pred, target, target_phase):
+        loss = self.q1(pred[:, 0, :, :, :].squeeze(), target.squeeze()) + \
+               self.q2(pred[:, 2, :, :, :].squeeze(), target.squeeze()) + \
+               2 * self.l1(pred[:, 1, :, :, :].squeeze(), target.squeeze()) + \
+               3 * self.l2(pred[:, 1, :, :, :].squeeze(), target_phase.squeeze())
+
+        return loss
+
+
+class MyRMSE(nn.Module):
+    def forward(self, pred, target):
+        pred = pred.flatten(1)
+        target = target.flatten(1)
+        return torch.mean(torch.linalg.norm(target - pred, dim=1) / torch.linalg.norm(target, dim=1))*100

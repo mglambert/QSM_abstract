@@ -5,7 +5,7 @@ import time
 
 
 class QSMLoader(Dataset):
-    def __init__(self, indices, root="./data/", train=True):
+    def __init__(self, indices, root="F:/data/", train=True):
         self.root = root
         self.indices = indices
         self.to_tensor = lambda x: torch.Tensor(x)
@@ -31,7 +31,7 @@ class QSMLoader(Dataset):
         signal = mag * torch.exp(1j * phase_sr * scale)
         # _rr = np.random.rand()
 
-        snr = torch.randint(95, 105, (1,))
+        snr = np.random.uniform(30, 150)
 
         signal = signal + ((1. / snr) * (torch.randn(signal.shape) + 1j * torch.randn(signal.shape)))
 

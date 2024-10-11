@@ -3,7 +3,8 @@ import torch.nn as nn
 from tqdm import tqdm
 
 
-def run_epoch(model, dataloader, criterion, metric, device, optimizer=None, epoch=0, total_epoch=0, phase='train'):
+def run_epoch(model, dataloader, criterion, metric, device, optimizer=None, epoch=0, total_epoch=0, phase='train',
+              scaler=None):
     if phase == 'train':
         torch.cuda.empty_cache()
         model.train()
@@ -27,37 +28,35 @@ def run_epoch(model, dataloader, criterion, metric, device, optimizer=None, epoc
                 model.eval()
                 tepoch.set_description(f"\tVal. ")
 
-            phi = (phi * mask).to(device)
-
-            result = model(phi)
-            result = result * mask.to(device)
-
-            gt = gt.to(device)
-
-            torch.cuda.empty_cache()
-
-            phase_sr = (phase_sr * mask).to(device)
-            loss = criterion(result, gt, phase_sr)
-
+            with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=use_amp):
+                phi = (phi * mask).to(device)
+                result = model(phi)
+                result = result * mask.to(device)
+                gt = gt.to(device)
+                torch.cuda.empty_cache()
+                phase_sr = (phase_sr * mask).to(device)
+                loss = criterion(result, gt, phase_sr)
             metric_value = metric(result[:, 1:2], gt).item()
             cum_loss += loss.item()
             cum_metric_value += metric_value
 
             if phase == 'train':
-                loss.backward()
-                optimizer.step()
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
 
             current_cum_loss = cum_loss / n_batch
             current_metric_value = cum_metric_value / n_batch
             tepoch.set_postfix(Loss=current_cum_loss,
                                NRMSE=current_metric_value)
-
     epoch_loss = float(cum_loss / n_batch)
     mse_epoch = float(cum_metric_value / n_batch)
     return epoch_loss, mse_epoch
 
 
-def run_training(model, data_train, data_val, optimizer, criterion, metric, device, n_epochs, scheduler=None):
+def run_training(model, data_train, data_val, optimizer, criterion, metric, device, n_epochs, scheduler=None,
+                 scaler=None):
     history = {
         'train': {'loss': [], 'metric': []},
         'val': {'loss': [], 'metric': []},
@@ -65,7 +64,7 @@ def run_training(model, data_train, data_val, optimizer, criterion, metric, devi
 
     for epoch in range(1, n_epochs + 1):
         epoch_loss, rmse = run_epoch(model, data_train, criterion, metric, device, optimizer=optimizer, epoch=epoch,
-                                     total_epoch=n_epochs, phase='train')
+                                     total_epoch=n_epochs, phase='train', scaler=scaler)
 
         history['train']['loss'].append(epoch_loss)
         history['train']['metric'].append(rmse)
@@ -75,11 +74,56 @@ def run_training(model, data_train, data_val, optimizer, criterion, metric, devi
             history['val']['loss'].append(val_loss)
             history['val']['metric'].append(rmse)
 
-        torch.save(model.state_dict(), f"saved/model_epoch_{epoch}.pth")
+        checkpoint = {
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "scaler": scaler.state_dict()
+        }
+        # torch.save(checkpoint, f"saved/checkpoint_epoch_{epoch}.pth")
+
+
+        print(f'Epoch {epoch}/{n_epochs}   {eval_cosmos(model)}')
 
         if scheduler is not None:
             scheduler.step()
     return history
+
+
+def eval_cosmos(model):
+    from scipy import io
+    from utils import continuous_dipole_kernel
+    import numpy as np
+
+    data = io.loadmat('F:/data/Cosmos_SNR100.mat')
+    chi = data['chi_cosmos'] * data['mask_use']
+    mask = data['mask_use']
+
+    phase = np.real(np.fft.ifftn(np.fft.fftn(chi) * continuous_dipole_kernel(chi.shape))) * mask
+
+    mag = chi - chi.min()
+    mag = mag / mag.max()
+    mag = mag * mask
+
+    scale = np.pi / (2 * np.max(np.abs(phase)))
+    signal = mag * np.exp(1j * phase * scale)
+
+    snr = 100
+
+    signal = signal + ((1. / snr) * (np.random.randn(*signal.shape) + 1j * np.random.randn(*signal.shape)))
+
+    phase = np.angle(signal).astype(np.float32) / scale
+    phase = phase * mask
+    phase[80, 80, 80] = 2
+
+    p = torch.Tensor(phase).unsqueeze(0).unsqueeze(0)
+
+    with torch.inference_mode():
+        out = model((p).to(device)).cpu() * mask
+
+    gt = data['chi_cosmos'] * data['mask_use']
+    pred = out[0, 1].numpy() * data['mask_use']
+
+    return (100 * np.linalg.norm(pred.ravel() - gt.ravel()) / np.linalg.norm(gt.ravel()))
 
 
 if __name__ == '__main__':
@@ -89,17 +133,18 @@ if __name__ == '__main__':
     from torch.utils.data import DataLoader
     from utils import plot_3d_medical_image
     import matplotlib.pyplot as plt
-    from loss import quantile_regression_loss_fn
+    from loss import ConformalLoss, MyRMSE
 
+    use_amp = True
     torch.cuda.init()
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     hyper_params = {
-        "learning_rate": 0.5e-4,
-        "epochs": 2,
-        "train_batch_size": 16,
+        "learning_rate": 0.8e-4,
+        "epochs": 10,
+        "train_batch_size": 36,
         "val_batch_size": 10,
-        "exponential_lr_param": 0.95,
+        "exponential_lr_param": 0.98,
         "weight_decay": 1e-6,
     }
 
@@ -111,20 +156,28 @@ if __name__ == '__main__':
 
     model = UNet3D(in_channels=1, out_channels=3)
     # model.load_state_dict(torch.load('model_epoch_10.pth', weights_only=True))
-    model.load_state_dict(torch.load('./saved/model_epoch_48.pth', weights_only=False))
+    # model.load_state_dict(torch.load('./saved/model_epoch_48.pth', weights_only=False))
+
+    cp = torch.load(f"saved/checkpoint_epoch_10.pth")
+    model.load_state_dict(cp['model'])
     model = model.to(device)
 
-    metric = nn.MSELoss()
-    criterion = quantile_regression_loss_fn
+    # metric = nn.MSELoss()
+    metric = MyRMSE()
+    criterion = ConformalLoss()
 
     optimizer = torch.optim.Adam(model.parameters(), lr=hyper_params['learning_rate'],
                                  weight_decay=hyper_params['weight_decay']
                                  )
+    optimizer.load_state_dict(cp['optimizer'])
 
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, hyper_params['exponential_lr_param'])
 
+    scaler = torch.amp.GradScaler(enabled=use_amp)
+    scaler.load_state_dict(cp['scaler'])
+
     history = run_training(model, train_dl, val_dl, optimizer, criterion, metric, device, hyper_params['epochs'],
-                           scheduler=scheduler)
+                           scheduler=scheduler, scaler=scaler)
 
     plt.figure()
     plt.plot(history['train']['loss'], label='train')
@@ -153,6 +206,7 @@ if __name__ == '__main__':
             break
 
     import json
+
     with open('history.json', 'w') as f:
         json.dump(history, f)
 
@@ -161,7 +215,7 @@ if __name__ == '__main__':
         from utils import continuous_dipole_kernel
         import numpy as np
 
-        data = io.loadmat('data/Cosmos_SNR100.mat')
+        data = io.loadmat('F:/data/Cosmos_SNR100.mat')
         chi = data['chi_cosmos'] * data['mask_use']
         mask = data['mask_use']
 
@@ -174,7 +228,7 @@ if __name__ == '__main__':
         scale = np.pi / (2 * np.max(np.abs(phase)))
         signal = mag * np.exp(1j * phase * scale)
 
-        snr = np.random.randint(95, 105, (1,))
+        snr = 100
 
         signal = signal + ((1. / snr) * (np.random.randn(*signal.shape) + 1j * np.random.randn(*signal.shape)))
 
@@ -244,7 +298,6 @@ if __name__ == '__main__':
             pred[m] -= pred[m].mean()
             pred = np.clip(pred, -0.264, 0.391)
             print(ii, 100 * np.linalg.norm(pred.ravel() - gt.ravel()) / np.linalg.norm(gt.ravel()))
-
 
 #
 # from scipy.ndimage import affine_transform
