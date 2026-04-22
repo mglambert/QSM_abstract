@@ -79,7 +79,7 @@ def run_training(model, data_train, data_val, optimizer, criterion, metric, devi
             "optimizer": optimizer.state_dict(),
             "scaler": scaler.state_dict()
         }
-        # torch.save(checkpoint, f"saved/checkpoint_epoch_{epoch}.pth")
+        torch.save(checkpoint, f"saved/checkpoint_epoch_{epoch}.pth")
 
 
         print(f'Epoch {epoch}/{n_epochs}   {eval_cosmos(model)}')
@@ -133,48 +133,48 @@ if __name__ == '__main__':
     from torch.utils.data import DataLoader
     from utils import plot_3d_medical_image
     import matplotlib.pyplot as plt
-    from loss import ConformalLoss, MyRMSE
+    from loss import ConformalLoss, ConformalLoss2, MyRMSE
 
     use_amp = True
     torch.cuda.init()
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     hyper_params = {
-        "learning_rate": 0.8e-4,
-        "epochs": 10,
+        "learning_rate": 1e-4,
+        "epochs": 20,
         "train_batch_size": 36,
         "val_batch_size": 10,
-        "exponential_lr_param": 0.98,
+        "exponential_lr_param": 0.99,
         "weight_decay": 1e-6,
     }
 
-    ds_train = QSMLoader(list(range(500, 66_182)), train=True)
+    # ds_train = QSMLoader(list(range(500, 66_182)), train=True)
+    ds_train = QSMLoader(list(range(23_818, 66_182)), train=True)
     train_dl = DataLoader(ds_train, batch_size=hyper_params['train_batch_size'], shuffle=True)
     ds_val = QSMLoader(list(range(500)), train=False)
     val_dl = DataLoader(ds_val, batch_size=hyper_params['val_batch_size'], shuffle=True)
     # val_dl = None
 
     model = UNet3D(in_channels=1, out_channels=3)
-    # model.load_state_dict(torch.load('model_epoch_10.pth', weights_only=True))
-    # model.load_state_dict(torch.load('./saved/model_epoch_48.pth', weights_only=False))
 
-    cp = torch.load(f"saved/checkpoint_epoch_10.pth")
+    cp = torch.load(f"saved/checkpoint_epoch_1_respaldo.pth", weights_only=True)
     model.load_state_dict(cp['model'])
     model = model.to(device)
 
-    # metric = nn.MSELoss()
     metric = MyRMSE()
     criterion = ConformalLoss()
 
     optimizer = torch.optim.Adam(model.parameters(), lr=hyper_params['learning_rate'],
                                  weight_decay=hyper_params['weight_decay']
                                  )
-    optimizer.load_state_dict(cp['optimizer'])
+    # optimizer.load_state_dict(cp['optimizer'])
+    # optimizer.param_groups[0]['lr'] = hyper_params['learning_rate']
+
 
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, hyper_params['exponential_lr_param'])
 
     scaler = torch.amp.GradScaler(enabled=use_amp)
-    scaler.load_state_dict(cp['scaler'])
+    # scaler.load_state_dict(cp['scaler'])
 
     history = run_training(model, train_dl, val_dl, optimizer, criterion, metric, device, hyper_params['epochs'],
                            scheduler=scheduler, scaler=scaler)

@@ -16,6 +16,10 @@ class QSM_Loss(nn.Module):
         phase = torch.real(torch.fft.ifftn(torch.fft.fftn(output) * self.K))
         return self.l2(phase, target)
 
+    def get_phase(self, output):
+        phase = torch.real(torch.fft.ifftn(torch.fft.fftn(output) * self.K))
+        return phase
+
 
 class PinballLoss(nn.Module):
 
@@ -67,14 +71,33 @@ class ConformalLoss(nn.Module):
     def forward(self, pred, target, target_phase):
         loss = self.q1(pred[:, 0, :, :, :].squeeze(), target.squeeze()) + \
                self.q2(pred[:, 2, :, :, :].squeeze(), target.squeeze()) + \
-               2 * self.l1(pred[:, 1, :, :, :].squeeze(), target.squeeze()) + \
-               3 * self.l2(pred[:, 1, :, :, :].squeeze(), target_phase.squeeze())
+               self.l1(pred[:, 1, :, :, :].squeeze(), target.squeeze()) + \
+               3*self.l2(pred[:, 1, :, :, :].squeeze(), target_phase.squeeze())
 
         return loss
+
+
+class ConformalLoss2(nn.Module):
+    def __init__(self, q=0.1):
+        super(ConformalLoss2, self).__init__()
+        self.q1 = PinballLoss(quantile=q / 2)
+        self.q2 = PinballLoss(quantile=1 - q / 2)
+        self.l1 = nn.L1Loss()
+        self.l2 = QSM_Loss()
+
+    def forward(self, pred, target, target_phase):
+        loss = 4*self.q1(self.l2.get_phase(pred[:, 0, :, :, :].squeeze()), target_phase.squeeze()) + \
+               4*self.q2(self.l2.get_phase(pred[:, 2, :, :, :].squeeze()), target_phase.squeeze()) + \
+               0.5*self.l1(pred[:, 1, :, :, :].squeeze(), target.squeeze()) + \
+               4*self.l2(pred[:, 1, :, :, :].squeeze(), target_phase.squeeze())
+
+        return loss
+
+
 
 
 class MyRMSE(nn.Module):
     def forward(self, pred, target):
         pred = pred.flatten(1)
         target = target.flatten(1)
-        return torch.mean(torch.linalg.norm(target - pred, dim=1) / torch.linalg.norm(target, dim=1))*100
+        return torch.mean(torch.linalg.norm(target - pred, dim=1) / torch.linalg.norm(target, dim=1)) * 100

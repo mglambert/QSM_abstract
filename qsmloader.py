@@ -31,7 +31,7 @@ class QSMLoader(Dataset):
         signal = mag * torch.exp(1j * phase_sr * scale)
         # _rr = np.random.rand()
 
-        snr = np.random.uniform(30, 150)
+        snr = np.random.uniform(15, 120)
 
         signal = signal + ((1. / snr) * (torch.randn(signal.shape) + 1j * torch.randn(signal.shape)))
 

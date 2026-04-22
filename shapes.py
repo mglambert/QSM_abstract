@@ -154,7 +154,7 @@ if __name__ == "__main__":
 
 
     threads = []
-    for idx in tqdm(range(5_000)):
+    for idx in tqdm(range(17531, 17532)):
         threads.append(Thread(target=gen_and_save, args=(idx,)))
         threads[-1].start()
         if idx % threads_number == 0:
